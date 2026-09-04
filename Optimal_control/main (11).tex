@@ -1,0 +1,334 @@
+
+\documentclass{article}
+
+\usepackage{a4wide}
+\usepackage[utf8]{inputenc}
+\usepackage[russian]{babel}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage{indentfirst}
+\usepackage{hyperref}
+
+\usepackage{setspace}
+\usepackage{titlesec}
+\setlength\parident{1.5em}
+\begin{document}
+\thispagestyle{empty}
+
+\begin{center}
+\ \vspace{-3cm}
+
+\includegraphics[width=0.5\textwidth]{msu.eps}\\
+{\scshape Московский государственный университет имени М.~В.~Ломоносова}\\
+Факультет вычислительной математики и кибернетики\\
+Кафедра системного анализа
+
+\vfill
+
+{\LARGE Отчет по практикуму}
+
+\vspace{1cm}
+
+{\Huge\bfseries <<Нелинейная задача оптимального управления>>}
+\end{center}
+
+\vspace{1cm}
+
+\begin{flushright}
+  \large
+  \textit{Студент 315 группы}\\
+  Ю.\,М.~Алексеева
+
+  \vspace{5mm}
+
+  \textit{Руководитель практикума}\\
+  м.н.с. И.\,А.~Чистяков
+\end{flushright}
+
+\vfill
+
+\begin{center}
+Москва, 2025
+\end{center}
+
+\newpage
+\tableofcontents
+\newpage
+\section{Постановка задачи}
+Рассматривается система из двух обкновенных дифференциальных уравнений:\\
+
+\begin{equation}
+\label{eq:1}
+\begin{cases}
+    \dot{x}_1 = x_2+u_2\\
+    \dot{x}_2 = u_1+u_2x_2
+\end{cases},
+~~t\in[0,T],
+\end{equation}
+где $x_1, x_2 \in \mathbb{R}, u = (u_1, u_2)'\in\mathbb{R}^2.$ На возможные значения управляющих параметров $u_1, u_2$ наложены следующие ограничения:\\
+\begin{itemize}
+    \item[1.] либо $0 \leqslant u_1 \leqslant \alpha, ~ u_2 \in [k_1, k_2], ~k_2 \geqslant k_1 > 0,$
+    \item[2.] либо $u_1 \in \mathbb{R}, ~u_2\in[k_1, k_2], ~k_2\geqslant k_1 >0.$
+\end{itemize}
+Задан начальный момент времени $t_0 = 0$ и начальная позиция $x(0): ~x_1(0)=0, x_2(0) = S.$ Необходимо за счет выбора программного управления $u$ и начальной позиции перевести систему из заданной начальной позиции в такую позицию в момент времени $T$, в которой $|x_1(T)-L|\leqslant\varepsilon, ~|x_2(T)|\leqslant\varepsilon.$ На множестве всех реализаций программных управлений, переводящих материальную точку в указанное множество, необходимо решить задачу оптимизации:\\
+\begin{equation}
+\label{eq:2}
+    J = \int_0^Tu^4_1(t)dt \rightarrow \min_{u(\cdot)}.
+\end{equation}
+
+
+\newpage
+\section{Теоретические выкладки}
+\subsection{Принцип максимума Понтрягина}
+Введем функцию Гамильтона-Понтрягина:\\
+\begin{equation}
+\label{eq:3}
+    \overline{H}(\psi, x, u) = \psi_0f_0+ \langle \psi, f\rangle,
+\end{equation}
+где $f = (f_1(x, u), f_2(x, u)) ~-$ правые части системы $(\ref{eq:1})$.\\
+Сформулируем принцип максимума Понтрягина.\\
+\newtheorem{теорема}{Теорема}
+\newcommand{\const}{\mathrm{const}}
+\begin{теорема}
+    (ПМП). Пусть $x^*(\cdot), u^*(\cdot)) ~-$ оптимальная пара, тогда существует такая вектор-функция сопряженных переменных $\overline{\psi^*}(\cdot): [t_0, T] \rightarrow \mathbb{R}^3,~ \overline{\psi^*}(t) \neq 0, ~\forall t\in [t_0, T]$ такая, что выполнены следующие условия:
+    \begin{itemize}
+        \item[1.] Вектор-функция $\overline{\psi}(\cdot)$ удовлетворяет сопряженной системе:
+        $$
+        \begin{cases}
+            \dot{\psi}_0^*(t) = 0,\\
+            \left.\dot{\psi^*}(t)= -\dfrac{\partial \overline{H}}{\partial x}\right\vert_{\substack{x=x^*(t) \\ u=u^*(t)}}
+        \end{cases}
+        $$
+        \item[2.] Условие максимума: 
+        $$\overline{H}(\psi^*(t), x^*(t), u^*(t)) \stackrel{\text{п.в.} t}{=\joinrel=} \sup_{u\in \mathcal{P}}\overline{H}(x^*(t), \psi^*(t), u) = \overline{M}.$$
+        \item[3.] $\psi^*_0 = \const, \overline{M}= \const.$
+        \item[4.] Условия трансверсальности:
+        $$\psi^*(t_0) \perp T_{x^*(t_0)}\mathcal{X}_0,$$
+        $$\psi^*(T) \perp T_{x^*(T)}\mathcal{X}_1,$$
+        где $T_{x'}\mathcal{X}' ~-$ касательное подпространство множества $\mathcal{X}'$ в точке $x'.$
+    \end{itemize}
+\end{теорема}
+\subsection{Первичный анализ ПМП}
+Запишем функцию Гамильтона-Понтрягина для нашей поставленной задачи, она принимает вид:
+$$\overline{H}(\psi, x, u) = \psi_0u_1^4+\psi_1(x_2+u_2)+\psi_2(u_1+u_2x_2).$$
+Вычислим $\dot{\psi_1}$ и $\dot{\psi_2}$:
+$$\dot{\psi_1} = -\dfrac{\partial \overline{H}}{\partial x_1} = 0,~~ \dot{\psi_2} = -\dfrac{\partial \overline{H}}{\partial x_2} = -\psi_1-\psi_2u_2.$$
+Таким образом, сопряженная система имеет вид:
+$$
+\begin{cases}
+\dot{\psi_0} = 0,\\
+\dot{\psi_1} = 0,\\
+\dot{\psi_2} = -\psi_1-\psi_2u_2,
+\end{cases}
+\implies
+\begin{cases}
+\psi_0 = \const,\\
+\psi_1 = \const = \psi_1^0,\\
+\dot{\psi_2} = -\psi_1-\psi_2u_2.
+\end{cases}
+$$
+Сопряженная система не меняет свой вид в зависимости от значений $\psi_0.$ Поэтому в дальнейшем будем пользоваться ей.
+Функция Гамильтона-Понтрягина $\overline{H}$ достигает максимума по переменной $u_1,$ если:
+$$\dfrac{\partial\overline{H}}{\partial u_1} = 4\psi_0u_1^3 +\psi_2 = 0 \implies u_1 = -\sqrt[3]{\dfrac{\psi_2}{4\psi_0}}, ~\psi_0 \neq 0.$$
+Покажем, что $u_1=-\sqrt{\dfrac{\psi_2}{4\psi_0}},~ \psi_0 \neq0,$ является максимумом функции Гамильтона-Понтрягина. \\
+Разложим $\dfrac{\partial\overline{H}}{\partial u_1}$ на множители:
+$$4\psi_0u_1^3+\psi_2 = \left(u_1 + \sqrt[3]{\dfrac{\psi_2}{4\psi_0}}\right)\left(4\psi_0u_1^2-u_1\sqrt[3]{16\psi_0^2\psi_2}+\sqrt[3]{4\psi_0\psi_2^2}\right).$$
+Оценим вторую скобку:
+\begin{multline}
+L = \left(4\psi_0 u_1^2 - u_1 \sqrt[3]{16\psi_0^2\psi_2} + \sqrt[3]{4\psi_0\psi_2^2}\right)= \\
+= 4\psi_0\left(u_1^2 - u_1 \sqrt[3]{\dfrac{\psi_2}{4\psi_0}} + \sqrt[3]{\dfrac{\psi_2^2}{16\psi_0^2}}\right)= \\
+= 4\psi_0\left(\left(u_1 - \dfrac{1}{2}\sqrt[3]{\dfrac{\psi_2}{4\psi_0}}\right)^2 + \dfrac{3}{4}\sqrt[3]{\dfrac{\psi_2^2}{16\psi_0^2}}\right).
+\end{multline}
+При условии, что $\psi_0 <0$, имеем $L\leqslant0.$ Рассмотрим, что происходит при $L=0 $.
+$$L = 0 ~~\Leftrightarrow ~~
+\begin{cases}
+    u_1 = \dfrac{1}{2}\sqrt[3]{\dfrac{\psi_2}{4\psi_0}},\vspace{5pt}\\
+    \dfrac{3}{4}\sqrt[3]{\dfrac{\psi_2^2}{16\psi_0^2}} = 0
+\end{cases}
+~~\Leftrightarrow ~~
+\begin{cases}
+    u_1 = 0,\\
+    \psi_2 = 0.
+\end{cases}
+$$
+Таким образом, уравнение $4\psi_0u_1^3 +\psi_2 = 0$ имеет три корня, каждый из которых равен 0.\\
+Каждый из корней совпадает с $u_1 = -\sqrt[3]{\dfrac{\psi_2}{4\psi_0}}, ~\psi_2=0.$ Значит, кроме $u_1 = -\sqrt[3]{\dfrac{\psi_2}{4\psi_0}}$ других корней нет. Следовательно, осталось сравнить значение производной $\dfrac{\partial\overline{H}}{\partial u_1}$ с нулем и определить поведение функции $\overline{H}$ на интервалах: $\left(-\infty, -\sqrt[3]{\dfrac{\psi_2}{4\psi_0}}\right)$ и $\left(-\sqrt[3]{\dfrac{\psi_2}{4\psi_0}}, +\infty\right)$. \vspace{5pt}\\
+Если $u_1\in\left(-\infty, -\sqrt[3]{\dfrac{\psi_2}{4\psi_0}}\right):$
+$$u_1+\sqrt[3]{\dfrac{\psi_2}{4\psi_0}} < 0, ~L < 0 \implies \dfrac{\partial\overline{H}}{\partial u_1} > 0 \implies \overline{H} \text{ возрастает.}$$
+Если $u_1\in\left(-\sqrt[3]{\dfrac{\psi_2}{4\psi_0}}, +\infty\right):$
+$$u_1+\sqrt[3]{\dfrac{\psi_2}{4\psi_0}} > 0, ~L < 0 \implies \dfrac{\partial\overline{H}}{\partial u_1} < 0 \implies \overline{H} \text{ убывает.}$$
+Таким образом, $u_1 =  -\sqrt[3]{\dfrac{\psi_2}{4\psi_0}}$, действительно, является максимумом функции Гамильтона-Понтрягина.\\
+
+\newtheorem{определение}{Определение}
+\begin{определение}
+    Рассматривается линейное неоднородное дифференциальное уравнение:
+    $$
+    \begin{cases}
+        \dot{x}(t) = A(t)x(t) +F(t),\\
+        x(t_0) = x^0.
+    \end{cases}
+    $$
+    Пусть $X(t, \tau)~-~$фундаментальная матрица Коши. Тогда решение данного уравнения находится по \textbf{формуле Коши}:
+    $$x(t) = X(t, t_0)x^0+\int^t_{t_0}X(t, \tau)F(\tau)d\tau,$$
+    где матрица $X(t, \tau)~-~$ решение задачи Коши:
+    $$
+    \begin{cases}
+        \dfrac{\partial X(t, \tau)}{\partial t} = A(t)X(t, \tau),\\
+        X(\tau, \tau) = I.
+    \end{cases}
+    $$
+\end{определение}
+\textbf{Связь переменных $T, L, S, \varepsilon$}\\
+Рассмотрим уравнение:
+$$
+\begin{cases}
+    \dot{x}_2(t) = u_2(t)x_2(t)+u_1(t),\\
+    x_2(0) = S.
+\end{cases}
+$$
+Найдем фундаментальную матрицу Коши для рассматриваемого уравнения:
+$$
+\begin{cases}
+    \dfrac{\partial X(t, \tau)}{\partial t} = u_2(t)X(t, \tau),\\
+    X(\tau, \tau) = I.
+\end{cases}
+\implies X(t, \tau) = e^{\int^t_{\tau}u_2(\tau)d\tau}.
+$$
+Запишем формулу Коши для $x_2(T):$
+$$x_2(T) = e^{\int_0^T u_2(t) dt} x_2(0) + e^{\int_0^T u_2(t) dt} \int_0^T u_1(t) e^{-\int_0^t u_2(\tau) d\tau} dt.$$
+Учитывая, что $x_2(0)= S,~|x_2(T)|\leqslant\varepsilon, ~0\leqslant u_1\leqslant\alpha, ~k_1\leqslant u_2\leqslant k_2.$
+$$k_1\leqslant u_2\leqslant k_2\implies k_1T\leqslant {\int_0^T u_2(t) dt}\leqslant k_2T \implies e^{k_1T}\leqslant 
+e^{\int_0^T u_2(t) dt}\leqslant e^{k_2T},$$
+
+\begin{multline*}
+k_1 \leqslant u_2 \leqslant k_2 \implies -k_2 t \leqslant -\int_0^t u_2(\tau) d\tau \leqslant -k_1 t 
+\implies e^{-k_2 t} \leqslant e^{-\int_0^t u_2(\tau) d\tau} \leqslant e^{-k_1 t} \implies\\
+\implies 0 \leqslant u_1 e^{-\int_0^t u_2(\tau) d\tau} \leqslant \alpha e^{-k_1 t}
+\implies 0 \leqslant \int_0^T u_1(t) e^{-\int_0^t u_2(\tau) d\tau} dt \leqslant -\dfrac{\alpha}{k_1} \left( e^{-k_1 T} - 1 \right) \implies\\
+\implies 0 \leqslant e^{\int_0^T u_2(t) dt} \int_0^T u_1(t) e^{-\int_0^t u_2(\tau) d\tau} dt \leqslant \dfrac{\alpha}{k_1} \left( e^{k_2 T} - e^{(k_2 - k_1) T} \right).
+\end{multline*}
+
+Значит,
+
+\begin{multline*}
+Se^{k_1 T} \leqslant e^{\int_0^T u_2(t) dt} x_2(0) + e^{\int_0^T u_2(t) dt} \int_0^T u_1(t) e^{-\int_0^t u_2(\tau) d\tau} dt 
+\leqslant \dfrac{\alpha}{k_1} \left( e^{k_2 T} - e^{(k_2 - k_1) T} \right) + Se^{k_2 T} \implies\\
+\implies  -\varepsilon \leqslant Se^{k_1 T} \leqslant x_2(T)  \leqslant \dfrac{\alpha}{k_1} \left( e^{k_2 T} - e^{(k_2 - k_1) T} \right) + Se^{k_2 T}\leqslant \varepsilon.
+\end{multline*}
+Таким образом, получаем итоговое неравенство на связь интересующих нас переменных:
+$$-\varepsilon \leqslant Se^{k_1 T} \leqslant \dfrac{\alpha}{k_1} \left( e^{k_2 T} - e^{(k_2 - k_1) T} \right) + Se^{k_2 T}\leqslant \varepsilon$$
+
+
+
+
+
+
+
+
+\subsubsection{Задача 1}
+$\label{subsub:1}$
+Напомним, что $0 \leqslant u_1 \leqslant \alpha, ~ u_2 \in [k_1, k_2], ~k_2 \geqslant k_1 > 0.$\\
+\textbf{Нормальный случай}\\
+Здесь $\psi_0\neq0.$ Не ограничивая общности, можно считать $\psi_0 = -\dfrac{1}{4}.$\\
+Для максимизации функции Гамильтона-Понтрягина выбираем следующие управления:
+$$
+u_1^* = 
+\begin{cases}
+    \alpha, & \psi_2 > \alpha^3, \\
+    \sqrt[3]{\psi_2}, & 0 \leqslant \psi_2 \leqslant \alpha^3, \\
+    0, & \psi_2 < 0,
+\end{cases}
+~~~~
+u_2^* = 
+\begin{cases}
+    k, & \psi_1 + \psi_2 x_2 > 0, \\
+    [-k, k], & \psi_1 + \psi_2 x_2 = 0, \\
+    -k, & \psi_1 + \psi_2 x_2 < 0.
+\end{cases}
+$$
+\textbf{Анормальный случай}\\
+Здесь $\psi_0=0.$\\
+Для максимизации функции Гамильтона-Понтрягина выбираем следующие управления:
+$$
+u_1^* = 
+\begin{cases}
+    \alpha, &\psi_2 >0, \\
+    [0, \alpha], &\psi_2=0,\\
+    0, &\psi_2 < 0,
+\end{cases}
+~~~~
+u_2^* = 
+\begin{cases}
+    k, &\psi_1 +\psi_2x_2>0, \\
+    [-k, k], &\psi_1 +\psi_2x_2=0,\\
+    -k, &\psi_1 +\psi_2x_2<0.
+\end{cases}
+$$
+\textbf{Условия трансверсальности}\\
+Рассмотрим условия трансверсальности для поставленной задачи. \\
+Исследуем достижимость точки $(L, 0)$. \\
+Если $u_1\geqslant 0,~ x_2(T) = 0,$ то запишем формулу Коши для $x_2(T)$:
+$$x_2(T) = e^{\int_0^T u_2(t) dt} x_2(0) + e^{\int_0^T u_2(t) dt} \int_0^T u_1(t) e^{-\int_0^t u_2(\tau) d\tau} dt = 0 \implies S + \int_0^T u_1(t) e^{-\int_0^t u_2(\tau) d\tau} dt = 0.$$
+Таким образом, рассмотрим 3 случая: $S> 0,S = 0,  S <0.$\\
+\begin{itemize}
+    \item [1.] $S > 0$:
+    $$u_1(t) \geqslant 0, e^{-\int_0^t u_2(\tau) d\tau} > 0 \implies x_2(T) > 0 \implies \text{противоречие, точка недостижима.}$$
+    $$u_1(t) \in \mathbb{R}, e^{-\int_0^t u_2(\tau) d\tau} > 0 \implies \text{точка достижима.} $$
+    Управление в этом случае должно удовлетворять уравнению:
+    $$S + \int_0^T u_1(t) e^{-\int_0^t u_2(\tau) d\tau} dt = 0.$$
+    \item[2.] $S=0:$
+    $$u_1(t) \geqslant 0, e^{-\int_0^t u_2(\tau) d\tau} > 0 \implies u_1(t) =  0, ~ \forall t\in[0, T].$$
+    Значит, $$\dot{x}_1 = 0 + 0, ~x(0) = 0 \implies x_1(t) = 0, ~\forall t\in[0,T].$$
+    Пришли к противоречию. В этом случае, точка недостижима.
+    \item [3.] $S<0:$
+    Точка достижима и управление в этом случае должно удовлетворять уравнению:
+    $$S + \int_0^T u_1(t) e^{-\int_0^t u_2(\tau) d\tau} dt = 0.$$
+\end{itemize}
+Чтобы обобщить все эти случаи, для простоты в качестве конечного множества можно рассматривать любую окрестность точки $(L, 0)$. В качестве примера рассмотрим случай, когда конечной точкой множества является квадрат.\\
+Множество $\mathcal{X}_0$ является одноточечным множеством, поэтому условие трансверсальности на левом конце будет выполнено для любой функции $\psi(t).$\\
+Множество $\mathcal{X}_1$ представляет собой квадрат $[L-\varepsilon, L+\varepsilon]\times [-\varepsilon, \varepsilon].$ Таким образом, условие трансверсальности для правого конца (при нормировке вектора $\psi(t)$) можно записать в виде:
+$$
+\psi(t) = 
+\begin{cases}
+    (1, 0), &\text{если}  ~~x_1(T) = \varepsilon, ~x_2(T)\in[L-\varepsilon, L+\varepsilon
+    ],\\
+    (-1, 0), &\text{если}  ~~x_1(T) = -\varepsilon, ~x_2(T)\in[L-\varepsilon, L+\varepsilon
+    ],\\
+    (0, 1), &\text{если}  ~~x_2(T) = L + \varepsilon, ~x_1(T)\in[-\varepsilon, \varepsilon
+    ],\\
+    (0, -1), &\text{если}  ~~x_2(T) = L- \varepsilon, ~x_1(T)\in[-\varepsilon, \varepsilon
+    ].\\
+\end{cases}
+$$
+\subsubsection{Задача 2}
+Напомним, что $u_1 \in \mathbb{R}, ~u_2\in[k_1, k_2], ~k_2\geqslant k_1 >0.$\\
+\textbf{Нормальный случай}
+Здесь $\psi_0\neq0.$ Не ограничивая общности, можно считать $\psi_0 = -\dfrac{1}{4}.$\\
+Для максимизации функции Гамильтона-Понтрягина выбираем следующие управления:
+$$
+u_1^* = 
+\sqrt[3]{\psi_2},
+~~~~
+u_2^* = 
+\begin{cases}
+    k, & \psi_1 + \psi_2 x_2 > 0, \\
+    [-k, k], & \psi_1 + \psi_2 x_2 = 0, \\
+    -k, & \psi_1 + \psi_2 x_2 < 0.
+\end{cases}
+$$
+\textbf{Анормальный случай}\\
+Анормальный случай невозможен, так как при $\psi_0= 0$ управление не ограниченно $(u_1(t) = \infty).$\\
+\textbf{Условия трансверсальности}\\
+Условия трансверсальности такие же, как в пункте $\ref{subsub:1}.$
+\newpage
+\begin{thebibliography}{99}
+\bibitem{1} Чистяков И.А., Паршиков М.В. Лекции по Оптимальному Управлению
+\bibitem{2} Арутюнов А.В. Лекции по Многозначному Анализу.
+\end{thebibliography}
+\end{document}
