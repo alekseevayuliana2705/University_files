@@ -1,0 +1,826 @@
+"""
+Решение обратной задачи модели динамики распределения доходов
+Восстановление функции подражательного поведения φ(γ) и коэффициента β
+
+Данные:
+- Income.csv: кривые Лоренца y(x_i, t_j) (доли децилей)
+- Pre_*.csv, Post_*.csv: для построения функции перераспределения ψ₀(γ)
+"""
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.interpolate import PchipInterpolator, UnivariateSpline
+from scipy.integrate import quad, trapz
+from scipy.optimize import minimize
+from scipy.stats import linregress
+import warnings
+warnings.filterwarnings('ignore')
+
+# =============================================================================
+# 1. ЗАГРУЗКА ДАННЫХ ИЗ Income.csv (КРИВЫЕ ЛОРЕНЦА)
+# =============================================================================
+
+def load_lorenz_data():
+    """
+    Загрузка данных кривых Лоренца из Income.csv
+    Возвращает словарь: {год: {дециль: доля дохода}}
+    """
+    df = pd.read_csv('Income.csv', delimiter=';', skipinitialspace=True, encoding='utf-8')
+    
+    # Очищаем данные
+    df = df[df['COUNTRY'] == 'Germany'].copy()
+    
+    # Преобразуем доли децилей в числа
+    decile_cols = ['DECILE 1', 'DECILE 2', 'DECILE 3', 'DECILE 4', 'DECILE 5',
+                   'DECILE 6', 'DECILE 7', 'DECILE 8', 'DECILE 9', 'DECILE 10']
+    
+    lorenz_data = {}
+    
+    for _, row in df.iterrows():
+        year = int(row['YEAR'])
+        
+        # Пропускаем годы без данных
+        if pd.isna(row['DECILE 1']):
+            continue
+            
+        # Доли децилей (в процентах, делим на 100)
+        shares = np.array([float(row[col]) for col in decile_cols]) / 100
+        
+        # Нормируем (должны давать 1)
+        shares = shares / shares.sum()
+        
+        # Ординаты кривой Лоренца (накопленные доли)
+        lorenz = np.concatenate([[0], np.cumsum(shares)])
+        
+        lorenz_data[year] = {
+            'shares': shares,
+            'lorenz': lorenz,
+            'x_points': np.linspace(0, 1, 11)  # 0, 0.1, ..., 1.0
+        }
+    
+    return lorenz_data
+
+# =============================================================================
+# 2. ЗАГРУЗКА ДАННЫХ Pre/Post ДЛЯ ФУНКЦИИ ПЕРЕРАСПРЕДЕЛЕНИЯ ψ₀(γ)
+# =============================================================================
+
+def load_redistribution_data():
+    """
+    Загрузка данных до и после налогов для построения ψ₀(γ)
+    Используются все 4 файла: Post_0_50.csv, Post_50_100.csv, Pre_0_50.csv, Pre_50_100.csv
+    """
+    # Загружаем данные после налогов
+    post_0_50 = pd.read_csv('Post_0_50.csv', delimiter=';', skipinitialspace=True)
+    post_50_100 = pd.read_csv('Post_50_100.csv', delimiter=';', skipinitialspace=True)
+    
+    # Загружаем данные до налогов (оба файла)
+    pre_0_50 = pd.read_csv('Pre_0_50.csv', delimiter=';', skipinitialspace=True)
+    pre_50_100 = pd.read_csv('Pre_50_100.csv', delimiter=';', skipinitialspace=True)
+    
+    # Очищаем имена столбцов
+    post_0_50.columns = post_0_50.columns.str.strip()
+    post_50_100.columns = post_50_100.columns.str.strip()
+    pre_0_50.columns = pre_0_50.columns.str.strip()
+    pre_50_100.columns = pre_50_100.columns.str.strip()
+    
+    # Переименовываем для удобства
+    post_0_50 = post_0_50.rename(columns={
+        'Percentile': 'percentile',
+        'Year': 'year',
+        post_0_50.columns[2]: 'p0p10_post',
+        post_0_50.columns[3]: 'p10p20_post',
+        post_0_50.columns[4]: 'p20p30_post',
+        post_0_50.columns[5]: 'p30p40_post',
+        post_0_50.columns[6]: 'p40p50_post'
+    })
+    
+    post_50_100 = post_50_100.rename(columns={
+        'Percentile': 'percentile',
+        'Year': 'year',
+        post_50_100.columns[2]: 'p50p60_post',
+        post_50_100.columns[3]: 'p60p70_post',
+        post_50_100.columns[4]: 'p70p80_post',
+        post_50_100.columns[5]: 'p80p90_post',
+        post_50_100.columns[6]: 'p90p100_post'
+    })
+    
+    # Переименовываем pre данные (нижние 50%)
+    pre_0_50 = pre_0_50.rename(columns={
+        'Percentile': 'percentile',
+        'Year': 'year',
+        pre_0_50.columns[2]: 'p40p50_pre',
+        pre_0_50.columns[3]: 'p30p40_pre',
+        pre_0_50.columns[4]: 'p20p30_pre',
+        pre_0_50.columns[5]: 'p10p20_pre',
+        pre_0_50.columns[6]: 'p0p10_pre'
+    })
+    
+    # Переименовываем pre данные (верхние 50%)
+    pre_50_100 = pre_50_100.rename(columns={
+        'Percentile': 'percentile',
+        'Year': 'year',
+        pre_50_100.columns[2]: 'p90p100_pre',
+        pre_50_100.columns[3]: 'p80p90_pre',
+        pre_50_100.columns[4]: 'p70p80_pre',
+        pre_50_100.columns[5]: 'p60p70_pre',
+        pre_50_100.columns[6]: 'p50p60_pre'
+    })
+    
+    # Объединяем пост-налоговые данные
+    post_data = pd.merge(post_0_50, post_50_100, on=['percentile', 'year'], how='outer')
+    post_data = post_data.dropna(subset=['year']).copy()
+    post_data['year'] = post_data['year'].astype(int)
+    
+    # Объединяем до-налоговые данные
+    pre_data = pd.merge(pre_0_50, pre_50_100, on=['percentile', 'year'], how='outer')
+    pre_data = pre_data.dropna(subset=['year']).copy()
+    pre_data['year'] = pre_data['year'].astype(int)
+    
+    # Объединяем все
+    all_redist = pd.merge(post_data, pre_data, on='year', how='inner')
+    
+    return all_redist
+
+# =============================================================================
+# 3. ПОСТРОЕНИЕ ФУНКЦИИ ПЕРЕРАСПРЕДЕЛЕНИЯ ψ₀(γ)
+# =============================================================================
+def build_psi0_function(redist_data, year=None):
+    """
+    Строит функцию перераспределения ψ₀(γ) на основе данных Pre/Post
+    
+    Идея: ψ₀(γ) должна отражать, как налоги и трансферты изменяют доходы.
+    Простейший вариант: ψ₀(γ) пропорциональна γ, но с весами, отражающими
+    эффективность перераспределения для каждой доходной группы.
+    
+    Если year=None, усредняем по всем доступным годам
+    """
+    if year is not None:
+        data = redist_data[redist_data['year'] == year].iloc[0]
+    else:
+        # Усредняем по всем годам
+        data = redist_data.mean(numeric_only=True)
+    
+    # Собираем доли дохода до и после налогов для всех децилей
+    deciles = []
+    
+    # Для всех 10 децилей (теперь есть pre данные для всех)
+    for i in range(10):
+        if i < 5:  # Децили 0-4 (нижние 50%)
+            pre_col = f'p{i}0p{i+1}0_pre' if i < 4 else 'p40p50_pre'
+            post_col = f'p{i}0p{i+1}0_post'
+        else:  # Децили 5-9 (верхние 50%)
+            if i == 5:
+                pre_col = 'p50p60_pre'
+                post_col = 'p50p60_post'
+            elif i == 6:
+                pre_col = 'p60p70_pre'
+                post_col = 'p60p70_post'
+            elif i == 7:
+                pre_col = 'p70p80_pre'
+                post_col = 'p70p80_post'
+            elif i == 8:
+                pre_col = 'p80p90_pre'
+                post_col = 'p80p90_post'
+            else:  # i == 9
+                pre_col = 'p90p100_pre'
+                post_col = 'p90p100_post'
+        
+        if post_col in data.index and pre_col in data.index:
+            if not pd.isna(data[pre_col]) and not pd.isna(data[post_col]) and data[pre_col] > 0:
+                deciles.append({
+                    'decile': i,
+                    'gamma_pre': float(data[pre_col]),
+                    'gamma_post': float(data[post_col])
+                })
+    
+    # Преобразуем в массив
+    deciles_df = pd.DataFrame(deciles)
+    
+    if deciles_df.empty:
+        # Если нет данных, возвращаем простую функцию
+        def psi0_simple(gamma):
+            return gamma
+        return psi0_simple
+    
+    # Нормируем суммы к 1
+    total_pre = deciles_df['gamma_pre'].sum()
+    total_post = deciles_df['gamma_post'].sum()
+    
+    deciles_df['gamma_pre_norm'] = deciles_df['gamma_pre'] / total_pre
+    deciles_df['gamma_post_norm'] = deciles_df['gamma_post'] / total_post
+    
+    # Сортируем по gamma_pre
+    deciles_df = deciles_df.sort_values('gamma_pre_norm')
+    
+    # Строим функцию ψ₀(γ) на основе отношения post/pre
+    gamma_vals = deciles_df['gamma_pre_norm'].values
+    post_vals = deciles_df['gamma_post_norm'].values
+    
+    # Вес = насколько изменилась доля (больше 1 - выиграли, меньше - проиграли)
+    weights = post_vals / gamma_vals
+    
+    # Сглаживаем веса для устойчивости
+    from scipy.interpolate import UnivariateSpline
+    try:
+        # Используем сплайн с небольшим сглаживанием
+        weight_spline = UnivariateSpline(gamma_vals, weights, s=0.01, k=2)
+        
+        def psi0_weighted(g):
+            # Базовая пропорциональность γ
+            base = np.asarray(g)
+            # Получаем вес (ограничиваем диапазон)
+            w = weight_spline(np.clip(base, gamma_vals.min(), gamma_vals.max()))
+            # Нормируем, чтобы интеграл ψ₀(γ)dγ = 1 (приближенно)
+            result = base * w
+            # Избегаем отрицательных значений
+            result = np.maximum(result, 0)
+            return result
+    except:
+        # Если сплайн не работает, используем линейную интерполяцию
+        from scipy.interpolate import interp1d
+        weight_func = interp1d(gamma_vals, weights, kind='linear', 
+                               fill_value='extrapolate', bounds_error=False)
+        
+        def psi0_weighted(g):
+            base = np.asarray(g)
+            w = weight_func(np.clip(base, gamma_vals.min(), gamma_vals.max()))
+            result = base * w
+            result = np.maximum(result, 0)
+            return result
+    
+    return psi0_weighted
+
+# =============================================================================
+# 4. АППРОКСИМАЦИЯ КРИВЫХ ЛОРЕНЦА
+# =============================================================================
+
+def create_lorenz_splines(lorenz_data):
+    """
+    Создает гладкие монотонные сплайны для кривых Лоренца
+    """
+    splines = {}
+    
+    for year, data in lorenz_data.items():
+        x = data['x_points']
+        y = data['lorenz']
+        
+        # Монотонная интерполяция PCHIP
+        spline = PchipInterpolator(x, y)
+        
+        # Генерируем плотную сетку
+        x_dense = np.linspace(0, 1, 200)
+        y_dense = spline(x_dense)
+        gamma_dense = spline.derivative()(x_dense)
+        
+        # Проверяем положительность производной
+        gamma_dense = np.maximum(gamma_dense, 1e-6)
+        
+        splines[year] = {
+            'spline': spline,
+            'x_dense': x_dense,
+            'y_dense': y_dense,
+            'gamma_dense': gamma_dense
+        }
+    
+    return splines
+
+# =============================================================================
+# 5. ПАРАМЕТРИЗАЦИЯ ФУНКЦИИ φ(γ)
+# =============================================================================
+
+def phi_logistic(gamma, beta, phi0, phi1, k, gamma0):
+    """
+    Логистическая функция для φ(γ):
+    
+    φ(γ) = φ1 + (φ0 - φ1) / (1 + exp(k*(γ - γ0)))
+    
+    где:
+    - φ0 = φ(0) - норма дисконта беднейших (> 1)
+    - φ1 = φ(1) - норма дисконта богатейших (β ≤ φ1 ≤ 1)
+    - k > 0 - крутизна (чем больше, тем резче переход)
+    - γ0 - точка перегиба
+    """
+    phi = phi1 + (phi0 - phi1) / (1 + np.exp(k * (gamma - gamma0)))
+    return phi
+
+def phi_power(gamma, beta, a, b, c):
+    """
+    Степенная функция: φ(γ) = a * (1 - γ)^b + c
+    """
+    phi = a * (1 - gamma)**b + c
+    return phi
+
+# =============================================================================
+# 6. ВЫЧИСЛЕНИЕ ФУНКЦИОНАЛА G(x; φ)
+# =============================================================================
+
+def compute_G(x, spline_data, phi_func, psi0_func, x_grid, gamma_grid):
+    """
+    Вычисляет G(x; φ) = ∫₀ˣ [1-φ(γ_w)]ψ₀(γ_w)dw - y(x)∫₀¹[1-φ(γ_w)]ψ₀(γ_w)dw
+    """
+    # Получаем γ(w) на сетке
+    gamma_w = gamma_grid
+    
+    # y(x)
+    y_x = spline_data['spline'](x)
+    
+    # Подынтегральное выражение
+    integrand = (1 - phi_func(gamma_w)) * psi0_func(gamma_w)
+    
+    # Интеграл от 0 до x
+    idx_x = np.searchsorted(x_grid, x)
+    integral_to_x = trapz(integrand[:idx_x+1], x_grid[:idx_x+1])
+    
+    # Полный интеграл
+    integral_total = trapz(integrand, x_grid)
+    
+    # G(x)
+    G = integral_to_x - y_x * integral_total
+    
+    return G
+
+# =============================================================================
+# 7. ФУНКЦИОНАЛ НЕВЯЗКИ J(β, φ)
+# =============================================================================
+
+def create_objective_function(splines_by_year, years, r, psi0_func):
+    """
+    Создает функцию для минимизации J(β, φ)
+    """
+    years = sorted(years)
+    x_grid = splines_by_year[years[0]]['x_dense']
+    
+    # Вычисляем временные шаги
+    dt_list = []
+    for i in range(len(years)-1):
+        dt_list.append(years[i+1] - years[i])
+    
+    def objective(params):
+        """
+        params: [beta, phi_params...]
+        """
+        beta = params[0]
+        
+        # Создаем функцию φ с текущими параметрами
+        if len(params) == 5:  # логистическая: beta, phi0, phi1, k, gamma0
+            phi0, phi1, k, gamma0 = params[1:]
+            
+            # Проверяем ограничения
+            if phi1 < beta or phi1 > 1 or phi0 < 1 or k <= 0:
+                return 1e10
+            
+            def phi_func(g):
+                return phi_logistic(g, beta, phi0, phi1, k, gamma0)
+        
+        elif len(params) == 4:  # степенная: beta, a, b, c
+            a, b, c = params[1:]
+            
+            # Проверяем φ(1) = c должно быть >= beta
+            if c < beta:
+                return 1e10
+            
+            def phi_func(g):
+                return phi_power(g, beta, a, b, c)
+        
+        else:
+            raise ValueError("Неизвестная параметризация φ")
+        
+        # Вычисляем невязку
+        total_error = 0
+        
+        for i in range(len(years)-1):
+            year1 = years[i]
+            year2 = years[i+1]
+            dt = dt_list[i]
+            
+            data1 = splines_by_year[year1]
+            data2 = splines_by_year[year2]
+            
+            # Вычисляем G(x; φ) для каждого x
+            G_vals = np.array([compute_G(x, data1, phi_func, psi0_func, 
+                                         x_grid, data1['gamma_dense']) 
+                               for x in x_grid])
+            
+            # Модельное изменение
+            dy_model = dt * (r / (1 - beta)) * G_vals
+            
+            # Реальное изменение
+            dy_real = data2['y_dense'] - data1['y_dense']
+            
+            # Невязка (L2 норма)
+            error = trapz((dy_real - dy_model)**2, x_grid)
+            total_error += error
+        
+        return total_error
+    
+    return objective
+
+# =============================================================================
+# 8. ОПТИМИЗАЦИЯ
+# =============================================================================
+
+def solve_inverse_problem(lorenz_data, redist_data, r=0.03):
+    """
+    Решает обратную задачу: находит β и φ(γ)
+    """
+    # Строим сплайны кривых Лоренца
+    splines = create_lorenz_splines(lorenz_data)
+    
+    # Годы, для которых есть данные
+    available_years = sorted([y for y in splines.keys() if y >= 1950])
+    print(f"Доступные годы: {available_years}")
+    
+    # Строим функцию перераспределения
+    psi0_func = build_psi0_function(redist_data)
+    
+    # Создаем функцию невязки
+    objective = create_objective_function(splines, available_years, r, psi0_func)
+    
+    # Начальное приближение
+    # [beta, phi0, phi1, k, gamma0]
+    x0 = [0.5,    # beta
+          2.0,    # phi0 = φ(0) > 1
+          0.8,    # phi1 = φ(1) (должно быть между beta и 1)
+          10.0,   # k > 0
+          0.5]    # gamma0
+    
+    # Границы параметров
+    bounds = [
+        (0.1, 0.9),      # beta
+        (1.01, 5.0),     # phi0
+        (0.1, 1.0),      # phi1
+        (1.0, 50.0),     # k
+        (0.1, 0.9)       # gamma0
+    ]
+    
+    print("Запуск оптимизации...")
+    
+    # Оптимизация
+    result = minimize(objective, x0, bounds=bounds, 
+                      method='L-BFGS-B', 
+                      options={'maxiter': 1000, 'disp': True})
+    
+    if result.success:
+        beta_opt = result.x[0]
+        phi0_opt, phi1_opt, k_opt, gamma0_opt = result.x[1:]
+        
+        print(f"\nРезультаты оптимизации:")
+        print(f"β = {beta_opt:.4f}")
+        print(f"φ(0) = {phi0_opt:.4f}")
+        print(f"φ(1) = {phi1_opt:.4f}")
+        print(f"k = {k_opt:.4f}")
+        print(f"γ₀ = {gamma0_opt:.4f}")
+        print(f"Функционал J = {result.fun:.6f}")
+        
+        # Создаем финальную функцию φ
+        def phi_optimal(gamma):
+            return phi_logistic(gamma, beta_opt, phi0_opt, phi1_opt, k_opt, gamma0_opt)
+        
+        return beta_opt, phi_optimal, result
+    
+    else:
+        print("Оптимизация не сошлась")
+        print(result.message)
+        return None, None, result
+
+# =============================================================================
+# 9. ВИЗУАЛИЗАЦИЯ
+# =============================================================================
+
+def plot_results(lorenz_data, beta, phi_func, redist_data):
+    """
+    Визуализация результатов
+    """
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    
+    # 1. Кривые Лоренца
+    ax = axes[0, 0]
+    years_to_plot = [1950, 1980, 2000, 2020]
+    for year in years_to_plot:
+        if year in lorenz_data:
+            x = lorenz_data[year]['x_points']
+            y = lorenz_data[year]['lorenz']
+            ax.plot(x, y, marker='o', label=f'{year}')
+    ax.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Равенство')
+    ax.set_xlabel('Доля населения')
+    ax.set_ylabel('Доля дохода')
+    ax.set_title('Кривые Лоренца')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # 2. Функция φ(γ)
+    ax = axes[0, 1]
+    gamma_plot = np.linspace(0, 1, 100)
+    phi_plot = phi_func(gamma_plot)
+    ax.plot(gamma_plot, phi_plot, 'b-', linewidth=2)
+    ax.axhline(y=beta, color='r', linestyle='--', label=f'β = {beta:.3f}')
+    ax.axhline(y=1, color='gray', linestyle=':', alpha=0.5)
+    ax.set_xlabel('γ (доля дохода)')
+    ax.set_ylabel('φ(γ)')
+    ax.set_title('Функция подражательного поведения φ(γ)')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # 3. Распределение γ (плотность дохода)
+    ax = axes[0, 2]
+    for year in years_to_plot:
+        if year in lorenz_data:
+            splines = create_lorenz_splines({year: lorenz_data[year]})
+            x_dense = splines[year]['x_dense']
+            gamma_dense = splines[year]['gamma_dense']
+            ax.plot(x_dense, gamma_dense, label=f'{year}')
+    ax.set_xlabel('Ранг населения x')
+    ax.set_ylabel('γ(x) = dy/dx')
+    ax.set_title('Плотность распределения дохода')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # 4. Динамика доли беднейших (1-й дециль)
+    ax = axes[1, 0]
+    years = sorted(lorenz_data.keys())
+    poor_share = [lorenz_data[y]['shares'][0] * 100 for y in years]
+    ax.plot(years, poor_share, 'o-', color='green')
+    ax.set_xlabel('Год')
+    ax.set_ylabel('Доля дохода нижнего дециля (%)')
+    ax.set_title('Динамика доли беднейших 10%')
+    ax.grid(True, alpha=0.3)
+    
+    # 5. Динамика доли богатейших (10-й дециль)
+    ax = axes[1, 1]
+    rich_share = [lorenz_data[y]['shares'][9] * 100 for y in years]
+    ax.plot(years, rich_share, 'o-', color='red')
+    ax.set_xlabel('Год')
+    ax.set_ylabel('Доля дохода верхнего дециля (%)')
+    ax.set_title('Динамика доли богатейших 10%')
+    ax.grid(True, alpha=0.3)
+    
+    # 6. Коэффициент Джини
+    ax = axes[1, 2]
+    gini = []
+    for y in years:
+        shares = lorenz_data[y]['shares']
+        # Приближенный расчет Gini
+        x = np.linspace(0, 1, 11)
+        lorenz = lorenz_data[y]['lorenz']
+        gini_val = 1 - 2 * trapz(lorenz, x)
+        gini.append(gini_val)
+    
+    ax.plot(years, gini, 'o-', color='purple')
+    ax.set_xlabel('Год')
+    ax.set_ylabel('Коэффициент Джини')
+    ax.set_title('Динамика неравенства')
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('inverse_problem_results.png', dpi=150)
+    plt.show()
+
+# =============================================================================
+# 10. ФУНКЦИЯ ПЕРЕРАСПРЕДЕЛЕНИЯ НА ОСНОВЕ PRE/POST
+# =============================================================================
+def analyze_redistribution(redist_data):
+    """
+    Анализирует эффект перераспределения (налоги + трансферты)
+    """
+    # Годы с данными pre/post
+    available_years = sorted(redist_data['year'].unique())
+    
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    
+    # 1. Сравнение pre и post для последнего года
+    latest_year = available_years[-1]
+    data = redist_data[redist_data['year'] == latest_year].iloc[0]
+    
+    deciles = np.arange(1, 11)
+    post_shares = []
+    pre_shares = []
+    
+    for i in range(10):
+        if i < 5:
+            post_col = f'p{i}0p{i+1}0_post'
+            pre_col = f'p{i}0p{i+1}0_pre' if i < 4 else 'p40p50_pre'
+        else:
+            if i == 5:
+                post_col = 'p50p60_post'
+                pre_col = 'p50p60_pre'
+            elif i == 6:
+                post_col = 'p60p70_post'
+                pre_col = 'p60p70_pre'
+            elif i == 7:
+                post_col = 'p70p80_post'
+                pre_col = 'p70p80_pre'
+            elif i == 8:
+                post_col = 'p80p90_post'
+                pre_col = 'p80p90_pre'
+            else:
+                post_col = 'p90p100_post'
+                pre_col = 'p90p100_pre'
+        
+        post_shares.append(data[post_col])
+        pre_shares.append(data[pre_col])
+    
+    post_shares = np.array(post_shares)
+    pre_shares = np.array(pre_shares)
+    
+    # Нормируем
+    post_shares = post_shares / post_shares.sum()
+    pre_shares = pre_shares / pre_shares.sum()
+    
+    ax = axes[0, 0]
+    width = 0.35
+    x = np.arange(len(deciles))
+    ax.bar(x - width/2, pre_shares, width, label='До налогов', alpha=0.7, color='red')
+    ax.bar(x + width/2, post_shares, width, label='После налогов', alpha=0.7, color='blue')
+    ax.set_xlabel('Дециль')
+    ax.set_ylabel('Доля дохода')
+    ax.set_title(f'Распределение дохода ({latest_year})')
+    ax.set_xticks(x)
+    ax.set_xticklabels([f'D{i}' for i in range(1, 11)])
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # 2. Изменение доли по децилям (post - pre)
+    ax = axes[0, 1]
+    changes = (post_shares - pre_shares) * 100  # в процентных пунктах
+    colors = ['green' if c > 0 else 'red' for c in changes]
+    ax.bar(deciles, changes, color=colors, alpha=0.7)
+    ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+    ax.set_xlabel('Дециль')
+    ax.set_ylabel('Изменение доли (п.п.)')
+    ax.set_title('Эффект перераспределения')
+    ax.grid(True, alpha=0.3)
+    
+    # 3. Динамика доли нижних 50%
+    ax = axes[0, 2]
+    years = []
+    bottom50_pre = []
+    bottom50_post = []
+    
+    for year in available_years:
+        data = redist_data[redist_data['year'] == year].iloc[0]
+        pre_sum = 0
+        post_sum = 0
+        for i in range(5):
+            if i < 4:
+                pre_col = f'p{i}0p{i+1}0_pre'
+            else:
+                pre_col = 'p40p50_pre'
+            post_col = f'p{i}0p{i+1}0_post'
+            pre_sum += data[pre_col]
+            post_sum += data[post_col]
+        
+        years.append(year)
+        bottom50_pre.append(pre_sum)
+        bottom50_post.append(post_sum)
+    
+    bottom50_pre = np.array(bottom50_pre)
+    bottom50_post = np.array(bottom50_post)
+    
+    # Нормируем к базовому году
+    base_year = years[0]
+    base_pre = bottom50_pre[0]
+    base_post = bottom50_post[0]
+    
+    ax.plot(years, bottom50_pre/base_pre, 'o-', label='До налогов', color='red')
+    ax.plot(years, bottom50_post/base_post, 'o-', label='После налогов', color='blue')
+    ax.set_xlabel('Год')
+    ax.set_ylabel('Относительная доля')
+    ax.set_title('Динамика доли нижних 50%')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # 4. Динамика доли верхних 10%
+    ax = axes[1, 0]
+    top10_pre = []
+    top10_post = []
+    
+    for year in available_years:
+        data = redist_data[redist_data['year'] == year].iloc[0]
+        top10_pre.append(data['p90p100_pre'])
+        top10_post.append(data['p90p100_post'])
+    
+    top10_pre = np.array(top10_pre)
+    top10_post = np.array(top10_post)
+    
+    base_pre = top10_pre[0]
+    base_post = top10_post[0]
+    
+    ax.plot(years, top10_pre/base_pre, 'o-', label='До налогов', color='red')
+    ax.plot(years, top10_post/base_post, 'o-', label='После налогов', color='blue')
+    ax.set_xlabel('Год')
+    ax.set_ylabel('Относительная доля')
+    ax.set_title('Динамика доли верхних 10%')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # 5. Коэффициент перераспределения
+    ax = axes[1, 1]
+    redist_ratio = []
+    
+    for year in available_years:
+        data = redist_data[redist_data['year'] == year].iloc[0]
+        
+        # Доля нижних 50% после / до
+        bottom_pre = sum(data[f'p{i}0p{i+1}0_pre'] if i < 4 else data['p40p50_pre'] for i in range(5))
+        bottom_post = sum(data[f'p{i}0p{i+1}0_post'] for i in range(5))
+        
+        # Доля верхних 10% после / до
+        top_pre = data['p90p100_pre']
+        top_post = data['p90p100_post']
+        
+        # Коэффициент перераспределения
+        ratio = (bottom_post / bottom_pre) / (top_post / top_pre)
+        redist_ratio.append(ratio)
+    
+    ax.plot(years, redist_ratio, 'o-', color='purple', linewidth=2)
+    ax.axhline(y=1, color='gray', linestyle='--', alpha=0.5)
+    ax.set_xlabel('Год')
+    ax.set_ylabel('Коэффициент перераспределения')
+    ax.set_title('Эффективность перераспределения')
+    ax.grid(True, alpha=0.3)
+    
+    # 6. Функция ψ₀(γ)
+    ax = axes[1, 2]
+    psi0_func = build_psi0_function(redist_data, latest_year)
+    gamma_plot = np.linspace(0.01, 0.2, 100)
+    psi_plot = psi0_func(gamma_plot)
+    # Нормируем для наглядности
+    if psi_plot.sum() > 0:
+        psi_plot = psi_plot / np.trapz(psi_plot, gamma_plot)
+    ax.plot(gamma_plot, psi_plot, 'b-', linewidth=2)
+    ax.set_xlabel('γ (доля дохода)')
+    ax.set_ylabel('ψ₀(γ)')
+    ax.set_title('Функция перераспределения')
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('redistribution_analysis.png', dpi=150)
+    plt.show()
+    
+    # Выводим статистику
+    print(f"\nСтатистика перераспределения за {latest_year}:")
+    print(f"  Доля нижних 50% до налогов: {bottom50_pre[-1]:.1f} €")
+    print(f"  Доля нижних 50% после налогов: {bottom50_post[-1]:.1f} €")
+    print(f"  Доля верхних 10% до налогов: {top10_pre[-1]:.1f} €")
+    print(f"  Доля верхних 10% после налогов: {top10_post[-1]:.1f} €")
+    print(f"  Коэффициент перераспределения: {redist_ratio[-1]:.3f}")
+
+# =============================================================================
+# ОСНОВНАЯ ПРОГРАММА
+# =============================================================================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("РЕШЕНИЕ ОБРАТНОЙ ЗАДАЧИ МОДЕЛИ ДИНАМИКИ ДОХОДОВ")
+    print("=" * 60)
+    
+    # 1. Загружаем данные
+    print("\n1. Загрузка данных...")
+    lorenz_data = load_lorenz_data()
+    redist_data = load_redistribution_data()
+    
+    print(f"   Загружено {len(lorenz_data)} лет наблюдений кривых Лоренца")
+    print(f"   Загружено {len(redist_data)} лет данных по перераспределению")
+    
+    # 2. Анализируем перераспределение
+    print("\n2. Анализ функции перераспределения...")
+    analyze_redistribution(redist_data)
+    
+    # 3. Решаем обратную задачу
+    print("\n3. Решение обратной задачи...")
+    print("   Процентная ставка r = 0.03 (3%)")
+    
+    beta_opt, phi_opt, result = solve_inverse_problem(
+        lorenz_data, redist_data, r=0.03
+    )
+    
+    if beta_opt is not None:
+        # 4. Визуализируем результаты
+        print("\n4. Визуализация результатов...")
+        plot_results(lorenz_data, beta_opt, phi_opt, redist_data)
+        
+        # 5. Сохраняем результаты
+        print("\n5. Сохранение результатов...")
+        
+        # Сохраняем функцию φ
+        gamma_save = np.linspace(0, 1, 100)
+        phi_save = phi_opt(gamma_save)
+        
+        results_df = pd.DataFrame({
+            'gamma': gamma_save,
+            'phi': phi_save
+        })
+        results_df.to_csv('phi_function.csv', index=False)
+        
+        # Сохраняем параметры
+        with open('parameters.txt', 'w') as f:
+            f.write(f"beta = {beta_opt:.6f}\n")
+            f.write(f"r = 0.03\n")
+            f.write(f"J = {result.fun:.6f}\n")
+        
+        print("   Результаты сохранены в 'phi_function.csv' и 'parameters.txt'")
+    
+    print("\n" + "=" * 60)
+    print("РАСЧЕТ ЗАВЕРШЕН")
+    print("=" * 60)

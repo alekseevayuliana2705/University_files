@@ -1,0 +1,484 @@
+# ============================================
+# ПОЛНЫЙ КОД: ЗАГРУЗКА WID ДАННЫХ В ДЕЦИЛИ
+# С ИСПРАВЛЕННОЙ ВИЗУАЛИЗАЦИЕЙ (с точкой 0,0)
+# ============================================
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings('ignore')
+
+# ============================================
+# 1. НАСТРОЙКА ПУТЕЙ
+# ============================================
+
+# Путь к папке с данными
+data_path = Path.home() / 'Downloads' / 'diplom'
+
+print("="*60)
+print("ПРОВЕРКА ПАПКИ С ДАННЫМИ")
+print("="*60)
+print(f"Путь: {data_path}")
+print(f"Папка существует: {data_path.exists()}")
+
+if not data_path.exists():
+    print("\n❌ Папка не найдена!")
+    exit()
+
+# ============================================
+# 2. ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ ФАЙЛА СТРАНЫ
+# ============================================
+
+def load_wid_file(file_path, country_name):
+    """
+    Загружает WID файл с разделителем ';' и извлекает данные
+    """
+    try:
+        # Читаем файл, пропуская первую строку с описанием
+        df = pd.read_csv(file_path, sep=';', encoding='utf-8', skiprows=1)
+        
+        # Переименовываем колонки для удобства
+        df.columns = ['percentile', 'year', 'value']
+        
+        # Удаляем строки с пустыми значениями
+        df = df.dropna(subset=['value'])
+        
+        # Преобразуем год и значение в числа
+        df['year'] = pd.to_numeric(df['year'], errors='coerce')
+        df['value'] = pd.to_numeric(df['value'], errors='coerce')
+        
+        # Удаляем строки с NaN
+        df = df.dropna()
+        
+        print(f"   Загружено {len(df)} строк с данными")
+        
+        # Извлекаем нужные процентили
+        bottom_50 = df[df['percentile'] == 'p0p50'].copy()
+        top_10 = df[df['percentile'] == 'p90p100'].copy()
+        top_1 = df[df['percentile'] == 'p99p100'].copy()
+        
+        print(f"   Найдено Bottom 50%: {len(bottom_50)} записей")
+        print(f"   Найдено Top 10%: {len(top_10)} записей")
+        print(f"   Найдено Top 1%: {len(top_1)} записей")
+        
+        if len(bottom_50) == 0 or len(top_10) == 0:
+            print(f"   ❌ Не найдены нужные показатели")
+            return None
+        
+        # Создаем словарь для объединения по годам
+        data_by_year = {}
+        
+        # Добавляем Bottom 50%
+        for _, row in bottom_50.iterrows():
+            year = int(row['year'])
+            if year not in data_by_year:
+                data_by_year[year] = {}
+            data_by_year[year]['bottom_50'] = row['value']
+        
+        # Добавляем Top 10%
+        for _, row in top_10.iterrows():
+            year = int(row['year'])
+            if year not in data_by_year:
+                data_by_year[year] = {}
+            data_by_year[year]['top_10'] = row['value']
+        
+        # Добавляем Top 1% (если есть)
+        for _, row in top_1.iterrows():
+            year = int(row['year'])
+            if year not in data_by_year:
+                data_by_year[year] = {}
+            data_by_year[year]['top_1'] = row['value']
+        
+        # Преобразуем в DataFrame
+        result = []
+        for year, values in sorted(data_by_year.items()):
+            if 'bottom_50' in values and 'top_10' in values:
+                # Значения уже в долях (не в процентах)
+                result.append({
+                    'year': year,
+                    'bottom_50': values['bottom_50'],
+                    'top_10': values['top_10'],
+                    'top_1': values.get('top_1', np.nan)
+                })
+        
+        df_result = pd.DataFrame(result)
+        print(f"   ✅ Получено {len(df_result)} лет с полными данными")
+        
+        return df_result
+        
+    except Exception as e:
+        print(f"   ❌ Ошибка при загрузке: {e}")
+        return None
+
+# ============================================
+# 3. ФУНКЦИЯ ДЛЯ ПРЕОБРАЗОВАНИЯ В ДЕЦИЛИ
+# ============================================
+
+def convert_to_deciles(df, country_name):
+    """
+    Преобразует данные в 10 децилей
+    """
+    if df is None or len(df) == 0:
+        return None
+    
+    all_rows = []
+    skipped_years = []
+    
+    for _, row in df.iterrows():
+        year = int(row['year'])
+        bottom_50 = float(row['bottom_50'])
+        top_10 = float(row['top_10'])
+        
+        # Проверяем корректность данных
+        if bottom_50 <= 0 or top_10 <= 0:
+            skipped_years.append(year)
+            continue
+            
+        # Вычисляем middle 40%
+        middle_40 = 1 - bottom_50 - top_10
+        
+        # Если middle_40 отрицательный, нормализуем
+        if middle_40 < -0.01:
+            print(f"   ⚠️ {country_name} {year}: сумма {bottom_50+top_10:.3f} > 1, нормализую")
+            total = bottom_50 + top_10
+            bottom_50 = bottom_50 / total
+            top_10 = top_10 / total
+            middle_40 = 0
+        elif middle_40 < 0:
+            middle_40 = 0
+        
+        # Децили 1-5 (беднейшие 50%)
+        decile_1_5 = bottom_50 / 5
+        
+        # Децили 6-9 (средние 40%)
+        decile_6_9 = middle_40 / 4 if middle_40 > 0 else 0
+        
+        # Дециль 10 (богатейшие 10%)
+        decile_10 = top_10
+        
+        # Проверка суммы децилей
+        total = decile_1_5*5 + decile_6_9*4 + decile_10
+        if abs(total - 1.0) > 0.01:
+            print(f"   ⚠️ {country_name} {year}: сумма децилей {total:.3f}, нормализую")
+            factor = 1.0 / total
+            decile_1_5 *= factor
+            decile_6_9 *= factor
+            decile_10 *= factor
+        
+        # Создаём записи для каждого дециля
+        for d in range(1, 11):
+            if d <= 5:
+                share = decile_1_5
+            elif d <= 9:
+                share = decile_6_9
+            else:
+                share = decile_10
+            
+            all_rows.append({
+                'country': country_name,
+                'year': year,
+                'decile': d,
+                'income_share': share
+            })
+    
+    if skipped_years:
+        print(f"   ⚠️ Пропущены годы с некорректными данными: {skipped_years[:5]}")
+    
+    return pd.DataFrame(all_rows)
+
+# ============================================
+# 4. ЗАГРУЗКА ВСЕХ СТРАН
+# ============================================
+
+print("\n" + "="*60)
+print("ЗАГРУЗКА ДАННЫХ ПО СТРАНАМ")
+print("="*60)
+
+# Список стран с названиями файлов
+countries = [
+    ('Brazil', 'Brazil_data.csv'),
+    ('China', 'China_data.csv'),
+    ('France', 'France_data.csv'),
+    ('Germany', 'Germany_data.csv'),
+    ('Italy', 'Italy_data.csv'),
+    ('Japan', 'Japan_data.csv'),
+    ('Russia', 'Russia_data.csv'),
+    ('Sweden', 'Sweden_data.csv'),
+    ('USA', 'USA_data.csv')
+]
+
+all_data = []
+country_stats = {}
+
+for country_name, filename in countries:
+    print(f"\n📁 {country_name}")
+    
+    # Ищем файл в папке страны
+    file_path = data_path / country_name / filename
+    
+    if not file_path.exists():
+        # Пробуем искать прямо в папке diplom
+        file_path = data_path / filename
+    
+    if not file_path.exists():
+        print(f"   ❌ Файл не найден: {filename}")
+        continue
+    
+    print(f"   Найден файл: {file_path}")
+    
+    # Загружаем данные
+    df_indicators = load_wid_file(file_path, country_name)
+    
+    if df_indicators is None or len(df_indicators) == 0:
+        print(f"   ❌ Не удалось загрузить данные")
+        continue
+    
+    # Фильтруем только годы с 1980 по 2024 (современный период)
+    df_indicators = df_indicators[df_indicators['year'] >= 1980]
+    
+    if len(df_indicators) == 0:
+        print(f"   ❌ Нет данных после 1980 года")
+        continue
+    
+    print(f"   ✅ Загружено {len(df_indicators)} лет: {df_indicators['year'].min()}-{df_indicators['year'].max()}")
+    
+    # Преобразуем в децили
+    df_deciles = convert_to_deciles(df_indicators, country_name)
+    
+    if df_deciles is not None and len(df_deciles) > 0:
+        all_data.append(df_deciles)
+        country_stats[country_name] = {
+            'years': len(df_indicators),
+            'year_range': f"{df_indicators['year'].min()}-{df_indicators['year'].max()}"
+        }
+        print(f"   ✅ Добавлено {len(df_deciles)} децильных строк")
+    else:
+        print(f"   ❌ Не удалось преобразовать в децили")
+
+# ============================================
+# 5. ОБЪЕДИНЕНИЕ ДАННЫХ
+# ============================================
+
+print("\n" + "="*60)
+print("ОБЪЕДИНЕНИЕ ДАННЫХ")
+print("="*60)
+
+if not all_data:
+    print("\n❌ НЕТ ЗАГРУЖЕННЫХ ДАННЫХ!")
+    exit()
+
+final_df = pd.concat(all_data, ignore_index=True)
+
+print(f"\n✅ Всего загружено: {len(final_df)} строк")
+print(f"✅ Страны: {sorted(final_df['country'].unique())}")
+print(f"✅ Годы: от {final_df['year'].min()} до {final_df['year'].max()}")
+
+print("\nСтатистика по странам:")
+for country, stats in country_stats.items():
+    print(f"   {country}: {stats['years']} лет ({stats['year_range']})")
+
+# ============================================
+# 6. ПРОВЕРКА ДАННЫХ
+# ============================================
+
+print("\n" + "="*60)
+print("ПРОВЕРКА ДАННЫХ")
+print("="*60)
+
+print("\nПервые 10 строк:")
+print(final_df.head(10))
+
+print("\nПроверка сумм по странам (последний год):")
+for country in sorted(final_df['country'].unique()):
+    country_data = final_df[final_df['country'] == country]
+    last_year = country_data['year'].max()
+    year_data = country_data[country_data['year'] == last_year]
+    total = year_data['income_share'].sum()
+    status = "✅" if abs(total - 1.0) < 0.01 else "⚠️"
+    print(f"{status} {country}, {last_year}: сумма = {total:.4f}")
+
+# ============================================
+# 7. СОХРАНЕНИЕ ДАННЫХ
+# ============================================
+
+print("\n" + "="*60)
+print("СОХРАНЕНИЕ ДАННЫХ")
+print("="*60)
+
+# Основной файл
+output_csv = data_path / 'all_countries_deciles.csv'
+final_df.to_csv(output_csv, index=False, encoding='utf-8')
+print(f"✅ Сохранено: {output_csv}")
+
+# Сводная таблица
+pivot_df = final_df.pivot_table(
+    values='income_share', 
+    index=['country', 'year'], 
+    columns='decile',
+    aggfunc='first'
+)
+pivot_df.columns = [f'decile_{d}' for d in pivot_df.columns]
+
+output_pivot = data_path / 'all_countries_pivot.csv'
+pivot_df.to_csv(output_pivot, encoding='utf-8')
+print(f"✅ Сохранено: {output_pivot}")
+
+# ============================================
+# 8. ВИЗУАЛИЗАЦИЯ (ИСПРАВЛЕННАЯ С ТОЧКОЙ 0,0)
+# ============================================
+
+print("\n" + "="*60)
+print("ВИЗУАЛИЗАЦИЯ (с точкой 0,0)")
+print("="*60)
+
+plt.figure(figsize=(14, 8))
+
+colors = plt.cm.tab10(np.linspace(0, 1, len(final_df['country'].unique())))
+
+for idx, country in enumerate(sorted(final_df['country'].unique())):
+    country_data = final_df[final_df['country'] == country]
+    last_year = country_data['year'].max()
+    year_data = country_data[country_data['year'] == last_year].sort_values('decile')
+    
+    if len(year_data) == 10:
+        # Добавляем точку (0,0) в начало массивов
+        pop_cum = np.array([0.0] + list(np.arange(0.1, 1.01, 0.1)))
+        inc_cum = np.array([0.0] + list(year_data['income_share'].cumsum().values))
+        
+        plt.plot(pop_cum, inc_cum, marker='.', color=colors[idx], 
+                linewidth=2, label=f"{country} ({last_year})")
+        
+        # Явно отмечаем точку (0,0) для первой страны (для примера)
+        if idx == 0:
+            plt.scatter(0, 0, color='black', s=50, zorder=5, alpha=0.5)
+
+# Линия равенства
+plt.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Абсолютное равенство')
+
+plt.xlabel('Доля населения (кумулятивно)', fontsize=12)
+plt.ylabel('Доля дохода (кумулятивно)', fontsize=12)
+plt.title('Кривые Лоренца для всех стран (с начальной точкой 0,0)', fontsize=14)
+plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)
+plt.grid(True, alpha=0.3)
+plt.xlim(-0.02, 1.02)
+plt.ylim(-0.02, 1.02)
+plt.tight_layout()
+
+plot_path = data_path / 'lorenz_curves_fixed.png'
+plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+print(f"✅ Исправленный график сохранён: {plot_path}")
+plt.show()
+
+# ============================================
+# 9. СТАТИСТИКА
+# ============================================
+
+print("\n" + "="*60)
+print("СТАТИСТИКА ПО СТРАНАМ")
+print("="*60)
+
+stats = []
+
+for country in sorted(final_df['country'].unique()):
+    country_data = final_df[final_df['country'] == country]
+    years = sorted(country_data['year'].unique())
+    
+    if len(years) > 0:
+        last_year = years[-1]
+        year_data = country_data[country_data['year'] == last_year].sort_values('decile')
+        
+        if len(year_data) == 10:
+            # Упрощённый коэффициент Джини
+            pop = np.array([0.0] + list(np.arange(0.1, 1.01, 0.1)))
+            inc_cum = np.array([0.0] + list(year_data['income_share'].cumsum().values))
+            
+            # Площадь под кривой Лоренца (метод трапеций)
+            area_under_lorenz = np.trapz(inc_cum, pop)
+            gini = 1 - 2 * area_under_lorenz
+            
+            stats.append({
+                'country': country,
+                'last_year': last_year,
+                'gini': gini,
+                'top10_share': year_data[year_data['decile'] == 10]['income_share'].values[0],
+                'bottom50_share': year_data[year_data['decile'] <= 5]['income_share'].sum(),
+                'n_years': len(years)
+            })
+
+stats_df = pd.DataFrame(stats)
+stats_df = stats_df.sort_values('gini', ascending=False)
+
+print("\nСтраны по уровню неравенства (Джини):")
+print(stats_df.to_string(index=False))
+
+stats_df.to_csv(data_path / 'inequality_stats.csv', index=False)
+print(f"\n✅ Статистика сохранена")
+
+# ============================================
+# 10. ДОПОЛНИТЕЛЬНАЯ ВИЗУАЛИЗАЦИЯ ДЛЯ ОДНОЙ СТРАНЫ
+# ============================================
+
+print("\n" + "="*60)
+print("ДЕТАЛЬНАЯ ВИЗУАЛИЗАЦИЯ ДЛЯ БРАЗИЛИИ")
+print("="*60)
+
+# Берем Бразилию для примера
+brazil_data = final_df[final_df['country'] == 'Brazil']
+if len(brazil_data) > 0:
+    plt.figure(figsize=(10, 8))
+    
+    # Показываем несколько лет для одной страны
+    years_to_plot = sorted(brazil_data['year'].unique())[-5:]  # последние 5 лет
+    
+    for year in years_to_plot:
+        year_data = brazil_data[brazil_data['year'] == year].sort_values('decile')
+        
+        pop_cum = np.array([0.0] + list(np.arange(0.1, 1.01, 0.1)))
+        inc_cum = np.array([0.0] + list(year_data['income_share'].cumsum().values))
+        
+        plt.plot(pop_cum, inc_cum, marker='.', linewidth=2, label=f'Бразилия {year}')
+    
+    plt.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Абсолютное равенство')
+    plt.scatter(0, 0, color='black', s=50, zorder=5)
+    
+    plt.xlabel('Доля населения (кумулятивно)', fontsize=12)
+    plt.ylabel('Доля дохода (кумулятивно)', fontsize=12)
+    plt.title('Динамика кривых Лоренца для Бразилии', fontsize=14)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.xlim(-0.02, 1.02)
+    plt.ylim(-0.02, 1.02)
+    
+    brazil_plot_path = data_path / 'brazil_dynamics.png'
+    plt.savefig(brazil_plot_path, dpi=300, bbox_inches='tight')
+    print(f"✅ График динамики Бразилии сохранён: {brazil_plot_path}")
+    plt.show()
+
+# ============================================
+# 11. ИТОГ
+# ============================================
+
+print("\n" + "="*60)
+print("✅ ВСЁ ГОТОВО!")
+print("="*60)
+print(f"\n📁 Все файлы сохранены в: {data_path}")
+print("\n📊 Основные файлы:")
+print("   1. all_countries_deciles.csv - данные по децилям (для модели)")
+print("   2. all_countries_pivot.csv - сводная таблица")
+print("   3. inequality_stats.csv - статистика неравенства")
+print("   4. lorenz_curves_fixed.png - график кривых Лоренца (с точкой 0,0)")
+print("   5. brazil_dynamics.png - динамика для Бразилии")
+
+# Выводим пример первых строк Brazil для проверки
+print("\n" + "="*60)
+print("ПРИМЕР ДАННЫХ BRAZIL (первые 20 строк):")
+print("="*60)
+brazil_sample = final_df[final_df['country'] == 'Brazil'].head(20)
+print(brazil_sample.to_string())
+
+print("\n" + "="*60)
+print("✅ Данные готовы для использования в модели!")
+print("="*60)

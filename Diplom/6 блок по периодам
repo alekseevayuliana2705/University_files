@@ -1,0 +1,57 @@
+# ==========================================================
+# 6B. ДИНАМИКА phi ПО ПЕРИОДАМ
+# ==========================================================
+
+PERIODS = [
+    (1980, 1990),
+    (1990, 2000),
+    (2000, 2010),
+    (2010, 2020)
+]
+
+# labels имеют вид "1980->1981"
+period_phi = {}
+
+for start, end in PERIODS:
+    phi_list = []
+
+    for label, phi_i in zip(labels, all_phi_smooth):
+        year0 = int(label.split("->")[0])
+
+        if start <= year0 < end:
+            phi_list.append(phi_i)
+
+    if len(phi_list) > 0:
+        phi_period = np.mean(phi_list, axis=0)
+        phi_period = np.maximum(phi_period, BETA_MODEL + EPS_PHI)
+        phi_period = np.minimum.accumulate(phi_period)
+
+        period_phi[(start, end)] = phi_period
+
+
+plt.figure(figsize=(10, 6))
+
+for (start, end), phi_period in period_phi.items():
+    plt.plot(
+        common_gamma,
+        phi_period,
+        linewidth=3,
+        label=f"{start}–{end}"
+    )
+
+plt.axhline(
+    BETA_MODEL,
+    linestyle="--",
+    color="black",
+    linewidth=2,
+    alpha=0.8,
+    label=r"$\beta$"
+)
+
+plt.title(r"Динамика функции $\phi(\gamma)$ по периодам")
+plt.xlabel(r"$\gamma$")
+plt.ylabel(r"$\phi(\gamma)$")
+plt.grid(alpha=0.3)
+plt.legend()
+plt.tight_layout()
+plt.show()
